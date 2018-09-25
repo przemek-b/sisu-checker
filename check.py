@@ -7,16 +7,26 @@ import optparse
 from tkinter import filedialog, messagebox
 from tkinter import *
 
+from enum import Enum
+
 VER=0.1
 
 
+class errorType(Enum):
+    MARKER = 1
+    NUMBER = 2
+    NAME   = 3
+
 class SisuDataHandler( xml.sax.ContentHandler ):
     def __init__(self):
-        self.regexes = [
+        self.tagRegexes = [
                         re.compile("%{[a-zA-Z0-9]+}s"),     # %{tag}s
                         re.compile("%\([a-zA-Z0-9]+\)s"),   # %(tag)s
-                        re.compile("{[0-9]+}")              # {0}
+                        re.compile("{[0-9]+}"),             # {0}
+                        re.compile("{a-zA-Z0-9]+}")         # {sometag}
                     ]
+        self.numberRegexPL = re.compile("[0-9]+( [0-9]{3}){0,}")  # numbers (PL) 
+        self.numberRegexEN = re.compile("[0-9]+(,[0-9]{3}){0,}")  # numbers (PL) 
         self.activeRe = None
         self.docuType = None
         self.currentData = None
@@ -52,10 +62,14 @@ class SisuDataHandler( xml.sax.ContentHandler ):
             elif self.lang == "en":
                 self.textEN += content
 
+    ## procedure is called when </row> is found
+    # - self.textEN, self.textPL    contain language representations
+    #
     def verify(self):
+        ### search for markers
         # first attempt to match tag:
         if self.activeRe is None:
-            for r in self.regexes:
+            for r in self.tagRegexes:
                 if re.search(r, self.textEN):
                     self.activeRe = r
                     self.verify()
@@ -63,11 +77,39 @@ class SisuDataHandler( xml.sax.ContentHandler ):
         else:
             for t in re.finditer(self.activeRe, self.textEN.strip()):
                if not re.search(re.escape( t.group() ), self.textPL):
-                   self.report.append({'id' : self.rowId,
+                   self.report.append({'type' : errorType.MARKER,
+                                       'id' : self.rowId,
                                        'textEN' : self.textEN.strip(),
                                        'textPL' : self.textPL.strip(),
                                        'tag' : t.group(),
                                        'tagSpanEN' : t.span() } )                  
+        ### search for numbers
+        mEN = re.search(self.numberRegexEN, self.textEN)
+        if mEN:
+            sEN = mEN.span()
+            try:
+                noEN = int(re.sub(",", "", self.textEN[slice(*sEN)]))
+            except ValueError:
+                noEN = None
+            mPL = re.search(self.numberRegexPL, self.textPL)
+            if mPL:
+                sPL = mPL.span()
+                try:
+                    noPL = int(re.sub(" ", "", self.textPL[slice(*sPL)]))
+                except ValueError:
+                    noPL = None
+            else:
+                sPL = (-1,-1)
+            if not mPL or noEN != noPL:
+                self.report.append({'type' : errorType.NUMBER,
+                                    'id' : self.rowId,
+                                    'textEN' : self.textEN.strip(),
+                                    'textPL' : self.textPL.strip(),
+                                    'tagSpanEN' : sEN,
+                                    'tagSpanPL' : sPL } )
+
+
+
                 
         # https://stackoverflow.com/questions/18715688/find-common-substring-between-two-strings
 
@@ -216,6 +258,10 @@ if __name__ == "__main__":
         print("Found ", str(len(report)), " problems")
         print("*********************************************")
         for d in report:
-            print('[ID]\t{0}\n[TAG]\t{1}\n[EN]\t{2}\n[PL]\t{3}'.format(d['id'], d['tag'], d['textEN'], d['textPL']))
+            if d['type'] == errorType.MARKER:
+                print('[ID]\t{0}\n[TAG]\t{1}\n[EN]\t{2}\n[PL]\t{3}'.format(d['id'], d['tag'], d['textEN'], d['textPL']))
+            elif d['type'] == errorType.NUMBER:
+                print('[ID]\t{0}\n[ER]\t{1}\n[EN]\t{2}\n[PL]\t{3}'.format(d['id'], "number!", d['textEN'], d['textPL']))
+
             print("*********************************************")
 
